@@ -7,7 +7,7 @@ from conllu import Sent
 from itertools import repeat
 from bisect import bisect_left, insort_right
 from copy import copy
-
+import numpy
 
 class Config(object):
 	"""a transition configuration.
@@ -195,15 +195,49 @@ class Oracle(object):
 
 if '__main__' == __name__:
 
-	def test_oracle(s, proj=False, lazy=True, verbose=True):
+	def get_dimensionality(model) :
+		for k, v in model.vocab.items() : # this should only reach the first item before returning but it seemed like the most elegant way to get the "first" item of the keyset
+			return len(model[k])
+
+	def test_oracle(s, embedding_model, proj=False, lazy=True, verbose=True):
+		dim = get_dimensionality(embedding_model)
 		o = Oracle(s, proj, lazy)
 		c = Config(s)
 		while not c.is_terminal():
 			act, arg = o.predict(c)
-			if verbose: print("{}\t{}".format(act, arg))
+			if verbose:
+				# get lists of all forms and tags
+				# note that everything is 1-indexed because of the root node (index 0 is empty in both lists)
+				pos = getattr(c.sent, "upostag")
+				form = getattr(c.sent, "form")
+				
+				# get stack top forms and tags, null-pad beginning for const length (3)
+				stack_top = c.stack[-3:]
+				stack_pos = ([None] * (3 - len(stack_top))) + [pos[x] for x in stack_top]
+				stack_form = ([None] * (3 - len(stack_top))) + [form[x] for x in stack_top]
+				
+				# get buffer top forms and tags, null-pad beginning for const length (3)
+				buffer_top = c.input[-3:][::-1] # reverse this because it's populated backwards
+				buffer_pos = ([None] * (3 - len(buffer_top))) + [pos[x] for x in buffer_top]
+				buffer_form = ([None] * (3 - len(buffer_top))) + [form[x] for x in buffer_top]
+				
+				f_list = [None] * 12
+				f_list[::2] = stack_pos + buffer_pos
+				f_list[1::2] = stack_form + buffer_form
+				
+				feature_vector = [embedding_model[w] if w in embedding_model else numpy.zeros(dim) for w in f_list]
+				
+				print("{}\t{}\t{}".format(act, arg, feature_vector))
 			assert c.doable(act)
 			getattr(c, act)(arg)
 		return s == c.finish()
+	
+	import gensim
+	import sys
+	try :
+		embedding_model = gensim.models.KeyedVectors.load_word2vec_format(sys.argv[1]).wv
+	except Exception : # UnicodeDecodeError, but there might be others
+		embedding_model = gensim.models.Word2Vec.load(sys.argv[1]).wv
 
 	s = Sent(
 		["1\tA\t_\t_\t_\t_\t2\tDET\t_\t_",
@@ -218,7 +252,7 @@ if '__main__' == __name__:
 	o = Oracle(s)
 	assert o.order == [0, 1, 2, 6, 7, 3, 4, 5, 8, 9]
 	assert o.mpcrt == [0, 2, 2, 3, 4, 5, 5, 5, 8, 9]
-	assert test_oracle(s, verbose=False)
+	assert test_oracle(s, embedding_model, verbose=True)
 
 	s = Sent(
 		["1\tWho\t_\t_\t_\t_\t7\tNMOD\t_\t_",
@@ -232,6 +266,6 @@ if '__main__' == __name__:
 	o = Oracle(s)
 	assert o.order == [0, 6, 1, 2, 3, 4, 5, 7, 8]
 	assert o.mpcrt == [0, 1, 2, 2, 4, 4, 4, 7, 8]
-	assert test_oracle(s, verbose=False)
+	assert test_oracle(s, embedding_model, verbose=True)
 
 	print("alright.")
