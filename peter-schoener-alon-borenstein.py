@@ -47,14 +47,17 @@ def get_actions(sentences, embedding_model) :
 			f_list[::2] = stack_pos + buffer_pos
 			f_list[1::2] = stack_form + buffer_form
 			
-			s_f_list += [[embedding_model[w] if w in embedding_model else numpy.zeros(dim) for w in f_list]]
-			s_t_list += [(act, arg)]
+			s_f_list += [numpy.concatenate([embedding_model[w] if w in embedding_model else numpy.zeros(dim) for w in f_list])]
+			#s_t_list += [(act, arg)]
+			s_t_list += [act]
 			
 			getattr(c, act)(arg)
 		assert s == c.finish()
 		features += s_f_list
 		transitions += s_t_list
-	
+
+	print(features[:10])
+	print(transitions[:10])
 	return features, transitions
 
 def make_model(sentences, embedding_model) :
