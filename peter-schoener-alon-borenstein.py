@@ -52,8 +52,8 @@ def get_actions(sentences, embedding_model) :
 			
 			getattr(c, act)(arg)
 		assert s == c.finish()
-		features += [s_f_list]
-		transitions += [s_t_list]
+		features += s_f_list
+		transitions += s_t_list
 	
 	return features, transitions
 
