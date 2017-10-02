@@ -1,14 +1,22 @@
 #!/usr/bin/python3
 
+# Authors:	Peter Schoener, 4013996
+#			Alon Borenstein, 4041104
+# Honor Code: We pledge that this program represents our own work.
+
 import numpy
 import os, sys
-from sklearn import linear_model, metrics
+from sklearn import svm, metrics
 import gensim
 
 ## CONLLU
 # for loading and saving conllu files.
 
 cols = 'id', 'form', 'lemma', 'upostag', 'xpostag', 'feats', 'head', 'deprel', 'deps', 'misc'
+
+def get_dimensionality(model) :
+ 	for k, v in model.vocab.items() : # this should only reach the first item before returning but it seemed like the most elegant way to get the "first" item of the keyset
+ 		return len(model[k])
 
 class Sent(object):
 	"""a conllu sentence.
@@ -32,9 +40,7 @@ class Sent(object):
 	__slots__ = cols + ('multi',)
 	cols = cols
 	dumb = ""
-	
-	print(cols)
-	
+		
 	def __init__(self, lines):
 		"""lines: iter<str>"""
 		dumb = self.dumb
@@ -102,16 +108,13 @@ def save(sents, file_path):
 			file.write("\n")
 
 ## TRANSITION
-#!/usr/bin/env python3
 
 # an implementation of transition-based projective/non-projective
 # dependency-parsing algorithms, with a static oracle.
 
-from conllu import Sent
 from itertools import repeat
 from bisect import bisect_left, insort_right
 from copy import copy
-import numpy
 
 class Config(object):
 	"""a transition configuration.
@@ -307,7 +310,6 @@ def get_actions(sentences, embedding_model) :
 	for s in sentences :
 		s_f_list = []
 		s_t_list = []
-		#s = Sent(sentence)
 		o = Oracle(s, False, True)
 		c = Config(s)
 		while not c.is_terminal():
@@ -342,12 +344,10 @@ def get_actions(sentences, embedding_model) :
 		features += s_f_list
 		transitions += s_t_list
 
-	# print(features[:10])
-	# print(transitions[:10])
 	return features, transitions
 
 def make_model(sentences, embedding_model) :
-	model = linear_model.SGDClassifier()
+	model = svm.LinearSVC()
 	train_model(model, sentences, embedding_model)
 	return model
 
@@ -356,6 +356,56 @@ def train_model(model, sentences, embedding_model) :
 	x = numpy.array(features)
 	y = numpy.array(transitions)
 	model.fit(x, y)
+
+def predict_parse(s, model, embedding_model) :
+	# get predicted sequence
+	p_f_list = []
+	p_t_list = []
+	o = Oracle(s, False, True)
+	c = Config(s)
+	while not c.is_terminal() :
+		# get lists of all forms and tags
+		# note that everything is 1-indexed because of the root node (index 0 is empty in both lists)
+		pos = getattr(s, "upostag")
+		form = getattr(s, "form")
+		
+		# get stack top forms and tags, null-pad beginning for const length (3)
+		stack_top = c.stack[-3:]
+		stack_pos = ([None] * (3 - len(stack_top))) + [pos[x] for x in stack_top]
+		stack_form = ([None] * (3 - len(stack_top))) + [form[x] for x in stack_top]
+		
+		# get buffer top forms and tags, null-pad beginning for const length (3)
+		buffer_top = c.input[-3:][::-1] # reverse this because it's populated backwards
+		buffer_pos = ([None] * (3 - len(buffer_top))) + [pos[x] for x in buffer_top]
+		buffer_form = ([None] * (3 - len(buffer_top))) + [form[x] for x in buffer_top]
+		
+		f_list = [None] * 12
+		f_list[::2] = stack_pos + buffer_pos
+		f_list[1::2] = stack_form + buffer_form
+		
+		p_act = model.predict([numpy.concatenate([embedding_model[w] if w in embedding_model else numpy.zeros(dim) for w in f_list])])[0]
+		a = 0
+		while not c.doable(p_act) :
+			if a >= 4 :
+				print("no possible actions")
+				break
+			p_act = actions[a]
+			a += 1
+		
+		if p_act == "right" :
+			i = c.stack[-1]
+			p_arg = o.sent.deprel[i]
+		elif p_act == "left" :
+			i = c.stack[-2]
+			p_arg = o.sent.deprel[i]
+		else :
+			p_arg = None
+		
+		p_t_list += [p_act]
+		getattr(c, p_act)(p_arg)
+	
+	s = c.finish()
+	return s, p_t_list
 
 if __name__ == "__main__" :
 	if len(sys.argv) < 3 :
@@ -380,7 +430,6 @@ if __name__ == "__main__" :
 	acc_list = []
 	for s in test_set :
 		# get gold standard sequence
-		g_f_list = []
 		g_t_list = []
 		o = Oracle(s, False, True)
 		c = Config(s)
@@ -407,69 +456,28 @@ if __name__ == "__main__" :
 			f_list[::2] = stack_pos + buffer_pos
 			f_list[1::2] = stack_form + buffer_form
 			
-		#	g_f_list += [numpy.concatenate([embedding_model[w] if w in embedding_model else numpy.zeros(dim) for w in f_list])]
 			g_t_list += [act]
 			
 			getattr(c, act)(arg)
 		assert s == c.finish()
 		
-		# get predicted sequence
-		p_f_list = []
-		p_t_list = []
-		o = Oracle(s, False, True)
-		c = Config(s)
-		while not c.is_terminal() :
-			# get lists of all forms and tags
-			# note that everything is 1-indexed because of the root node (index 0 is empty in both lists)
-			pos = getattr(s, "upostag")
-			form = getattr(s, "form")
-			
-			# get stack top forms and tags, null-pad beginning for const length (3)
-			stack_top = c.stack[-3:]
-			stack_pos = ([None] * (3 - len(stack_top))) + [pos[x] for x in stack_top]
-			stack_form = ([None] * (3 - len(stack_top))) + [form[x] for x in stack_top]
-			
-			# get buffer top forms and tags, null-pad beginning for const length (3)
-			buffer_top = c.input[-3:][::-1] # reverse this because it's populated backwards
-			buffer_pos = ([None] * (3 - len(buffer_top))) + [pos[x] for x in buffer_top]
-			buffer_form = ([None] * (3 - len(buffer_top))) + [form[x] for x in buffer_top]
-			
-			f_list = [None] * 12
-			f_list[::2] = stack_pos + buffer_pos
-			f_list[1::2] = stack_form + buffer_form
-			
-			p_act = model.predict([numpy.concatenate([embedding_model[w] if w in embedding_model else numpy.zeros(dim) for w in f_list])])[0]
-			a = 0
-			while not c.doable(p_act) :
-				if a >= 4 :
-					print("no possible actions")
-					break
-				p_act = actions[a]
-				a += 1
-			
-			if p_act == "right" :
-				i = c.stack[-1]
-				p_arg = o.sent.deprel[i]
-			elif p_act == "left" :
-				i = c.stack[-2]
-				p_arg = o.sent.deprel[i]
-			else :
-				p_arg = None
-			
-			#print(p_act)
-			p_t_list += [p_act]
-			getattr(c, p_act)(p_arg)
+		p_s, p_t_list = predict_parse(s, model, embedding_model)
 		
 		# compare gold standard and prediction
-		len_diff = len(p_t_list) - len(g_t_list)
-		if len_diff > 0 :
-			g_t_list += len_diff * ["NONE"]
-		elif len_diff < 0 :
-			p_t_list += (-len_diff) * ["NONE"]
-		accuracy = metrics.accuracy_score(g_t_list, p_t_list)
-	#	print(accuracy)
-		acc_list += [accuracy]
-	#print()
-	print(numpy.mean(accuracy))
+		l_attachment = 0.0
+		u_attachment = 0.0
+		sent_len = len(s.head)
+		for n in range(sent_len) :
+			if s.head[n] == p_s.head[n] :
+				u_attachment += 1.0
+				if s.deprel[n] == p_s.deprel[n] :
+					l_attachment += 1.0
+		l_attachment /= sent_len
+		u_attachment /= sent_len
+		acc_list += [[l_attachment, u_attachment]]
+	print(numpy.mean(acc_list, axis = 0))
 	
 	exit(0)
+
+# peak unlabelled attachment: 52.689%
+#        labelled attachment: 49.304%
