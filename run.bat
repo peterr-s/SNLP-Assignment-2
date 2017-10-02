@@ -1,0 +1,1 @@
+python peter-schoener-alon-borenstein.py ./UD_English/en_ud_train.conllu ./UD_English/en_ud_dev.conllu ./embeddings.bin
